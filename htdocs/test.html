@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Student Dashboard - Distance Education</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    h1 { color: #0066cc; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 10px; text-align: center; }
+    th { background-color: #f2f2f2; }
+  </style>
+</head>
+<body>
+  <h1>📚 Subject Dashboard</h1>
+  <button onclick="loadSubjects()">Load Subjects</button>
+  <table id="subjectTable" style="display:none;">
+    <thead>
+      <tr>
+        <th>Code</th>
+        <th>Name</th>
+        <th>Credits</th>
+        <th>Max Marks</th>
+        <th>Semester</th>
+        <th>Regulation</th>
+        <th>Type</th>
+        <th>Active</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    function loadSubjects() {
+      fetch("http://localhost/index.php?action=subjects")
+        .then(res => res.json())
+        .then(data => {
+          if (data.status === "success") {
+            const table = document.getElementById("subjectTable");
+            table.style.display = "table";
+            const tbody = table.querySelector("tbody");
+            tbody.innerHTML = "";
+
+            data.data.forEach(sub => {
+              let row = `<tr>
+                <td>${sub.subject_code}</td>
+                <td>${sub.subject_name}</td>
+                <td>${sub.credits}</td>
+                <td>${sub.max_marks}</td>
+                <td>${sub.semester_id}</td>
+                <td>${sub.regulation_id}</td>
+                <td>${sub.type}</td>
+                <td>${sub.is_active == 1 ? "Yes" : "No"}</td>
+              </tr>`;
+              tbody.innerHTML += row;
+            });
+          }
+        });
+    }
+  </script>
+</body>
+</html>
