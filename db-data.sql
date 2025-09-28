@@ -1513,6 +1513,166 @@ END$$
 
 DELIMITER ;
 
+/* ==========================================================
+   PATCH: Add study_centre table + integrate with result
+   ========================================================== */
+
+/* 1) Create study_centre table */
+CREATE TABLE IF NOT EXISTS study_centre (
+    centre_id INT AUTO_INCREMENT PRIMARY KEY,
+    centre_code VARCHAR(50) UNIQUE NOT NULL,    -- e.g. 'D601_DIST', 'AU_ONLINE'
+    centre_name VARCHAR(255) NOT NULL,
+    university_id INT NOT NULL,
+    mode_id INT NULL,                           -- FK to mode (Distance/Online/Hybrid)
+    address TEXT,
+    contact_info JSON,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (university_id) REFERENCES university(university_id),
+    FOREIGN KEY (mode_id) REFERENCES mode(mode_id),
+    INDEX idx_centre_university (university_id),
+    INDEX idx_centre_mode (mode_id),
+    INDEX idx_centre_code (centre_code)
+);
+
+/* 2) Extend result table to include centre_id */
+ALTER TABLE result
+  ADD COLUMN centre_id INT NULL AFTER university_id,
+  ADD INDEX idx_result_centre (centre_id),
+  ADD CONSTRAINT fk_result_centre FOREIGN KEY (centre_id) REFERENCES study_centre(centre_id);
+
+/* 3) Extend student_summary table to include centre_id (optional, useful for reporting) */
+ALTER TABLE student_summary
+  ADD COLUMN centre_id INT NULL AFTER branch_id,
+  ADD INDEX idx_summary_centre (centre_id),
+  ADD CONSTRAINT fk_summary_centre FOREIGN KEY (centre_id) REFERENCES study_centre(centre_id);
+
+/* 4) Extend result_temp table (import buffer) to capture centre_code */
+ALTER TABLE result_temp
+  ADD COLUMN centre_code VARCHAR(50) NULL AFTER university_code;
+
+/* ==========================================================
+   PATCH: Update sp_load_results to map centre_code -> centre_id
+   ========================================================== */
+DROP PROCEDURE IF EXISTS sp_load_results;
+DELIMITER $$
+
+CREATE PROCEDURE sp_load_results(IN p_batch_id INT)
+BEGIN
+    DECLARE done INT DEFAULT 0;
+
+    -- Variables
+    DECLARE v_reg VARCHAR(50);
+    DECLARE v_name VARCHAR(255);
+    DECLARE v_subject_code VARCHAR(50);
+    DECLARE v_im INT;
+    DECLARE v_um INT;
+    DECLARE v_total INT;
+    DECLARE v_status VARCHAR(20);
+    DECLARE v_ay VARCHAR(20);
+    DECLARE v_branch_name VARCHAR(255);
+    DECLARE v_sem INT;
+    DECLARE v_type VARCHAR(20);
+    DECLARE v_univ_code VARCHAR(20);
+    DECLARE v_deg_code VARCHAR(20);
+    DECLARE v_reg_code VARCHAR(20);
+    DECLARE v_centre_code VARCHAR(50);
+
+    -- IDs
+    DECLARE v_subject_id INT;
+    DECLARE v_ay_id INT;
+    DECLARE v_branch_id INT;
+    DECLARE v_sem_id INT;
+    DECLARE v_univ_id INT;
+    DECLARE v_reg_id INT;
+    DECLARE v_centre_id INT;
+
+    -- Cursor
+    DECLARE cur CURSOR FOR
+        SELECT reg_number, student_name, subject_code, im_marks, um_marks, total_marks,
+               result_status, academic_year, branch_name, semester_number, type,
+               university_code, degree_code, regulation_code, centre_code
+        FROM result_temp
+        WHERE batch_id = p_batch_id;
+
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = 1;
+
+    OPEN cur;
+
+    read_loop: LOOP
+        FETCH cur INTO v_reg, v_name, v_subject_code, v_im, v_um, v_total, v_status,
+                       v_ay, v_branch_name, v_sem, v_type,
+                       v_univ_code, v_deg_code, v_reg_code, v_centre_code;
+        IF done = 1 THEN
+            LEAVE read_loop;
+        END IF;
+
+        /* Map foreign keys */
+        SELECT subject_id INTO v_subject_id
+          FROM subject
+          WHERE subject_code = v_subject_code
+          LIMIT 1;
+
+        SELECT academic_year_id INTO v_ay_id
+          FROM academic_year
+          WHERE year_name = v_ay
+          LIMIT 1;
+
+        SELECT branch_id INTO v_branch_id
+          FROM branch
+          WHERE branch_name = v_branch_name
+          LIMIT 1;
+
+        SELECT semester_id INTO v_sem_id
+          FROM semester
+          WHERE semester_number = v_sem
+          LIMIT 1;
+
+        SELECT university_id INTO v_univ_id
+          FROM university
+          WHERE university_code = v_univ_code
+          LIMIT 1;
+
+        SELECT regulation_id INTO v_reg_id
+          FROM regulation
+          WHERE regulation_code = v_reg_code
+          LIMIT 1;
+
+        /* New: map study_centre */
+        IF v_centre_code IS NOT NULL THEN
+            SELECT centre_id INTO v_centre_id
+              FROM study_centre
+              WHERE centre_code = v_centre_code
+              LIMIT 1;
+        ELSE
+            SET v_centre_id = NULL;
+        END IF;
+
+        /* Insert or update result */
+        INSERT INTO result (
+            reg_number, student_name, subject_id, academic_year_id,
+            branch_id, semester_id, university_id, centre_id, regulation_id,
+            subject_code, im_marks, um_marks, total_marks, result_status, type
+        ) VALUES (
+            v_reg, v_name, v_subject_id, v_ay_id,
+            v_branch_id, v_sem_id, v_univ_id, v_centre_id, v_reg_id,
+            v_subject_code, v_im, v_um, v_total, v_status, v_type
+        )
+        ON DUPLICATE KEY UPDATE
+            im_marks = VALUES(im_marks),
+            um_marks = VALUES(um_marks),
+            total_marks = VALUES(total_marks),
+            result_status = VALUES(result_status),
+            updated_at = CURRENT_TIMESTAMP;
+
+    END LOOP;
+
+    CLOSE cur;
+END$$
+
+DELIMITER ;
+
 SET FOREIGN_KEY_CHECKS=1;
 
 
